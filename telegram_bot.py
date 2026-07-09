@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 CACHE_FILE = config.TEMP_DIR / "scan_cache.json"
 
+is_scanning = False
+
 def save_cache(data):
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -199,25 +201,70 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error analyzing symbol {symbol}: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Có lỗi xảy ra trong quá trình phân tích mã <b>{symbol}</b>. Lỗi: {str(e)}", parse_mode='HTML')
 
+async def execute_market_scan_and_notify(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Run a full market scan in the background and notify the chat when completed."""
+    global is_scanning
+    if is_scanning:
+        logger.info("Scan already running. Skip.")
+        return
+        
+    is_scanning = True
+    try:
+        # Run the full market scan (all HOSE stocks)
+        cache = await execute_market_scan()
+        if cache:
+            date_str = cache.get("date", "")
+            recs = cache.get("recommendations", [])
+            
+            if not recs:
+                msg = (
+                    f"🔍 <b>KẾT QUẢ QUÉT THỊ TRƯỜNG HOSE ({date_str})</b>\n\n"
+                    "Không tìm thấy cổ phiếu nào đạt tiêu chuẩn mua Wyckoff (Pha C/D khỏe, nến test cung cạn kiệt)."
+                )
+            else:
+                msg = f"🔍 <b>KẾT QUẢ QUÉT THỊ TRƯỜNG HOSE ({date_str})</b>\n"
+                msg += f"<i>(Dữ liệu phân tích lúc 15h00 phiên giao dịch trước đó)</i>\n\n"
+                msg += f"Dưới đây là <b>{len(recs)} mã cổ phiếu đạt tiêu chuẩn mua tốt nhất</b>:\n\n"
+                
+                for i, rec in enumerate(recs, 1):
+                    msg += (
+                        f"<b>{i}. Cổ phiếu {rec['symbol']}</b>\n"
+                        f"• Giá đóng cửa: <b>{rec['price']:,.0f} VND</b>\n"
+                        f"• Giai đoạn Wyckoff: <b>{rec['phase']}</b>\n"
+                        f"• Sức mạnh tương đối: <b>{rec['rs_status']}</b>\n"
+                        f"• Tín hiệu: <i>{rec['desc']}</i>\n"
+                        f"🔍 Chi tiết: <code>/analyze {rec['symbol']}</code>\n\n"
+                    )
+                msg += "💡 <i>Lưu ý: Bạn nên sử dụng lệnh /analyze chi tiết trên từng mã để xem biểu đồ kỹ thuật và các chỉ số định lượng VaR/MDD trước khi giao dịch.</i>"
+                
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Có lỗi xảy ra trong quá trình quét toàn bộ thị trường sàn HOSE.")
+    except Exception as e:
+        logger.error(f"Error in execute_market_scan_and_notify: {e}")
+    finally:
+        is_scanning = False
+
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /scan command to display the latest cached recommendations."""
+    global is_scanning
     cache = load_cache()
     if not cache:
-        status_msg = await safe_reply_text(
+        if is_scanning:
+            await safe_reply_text(
+                update, context,
+                "🔄 Tiến trình quét toàn bộ sàn HOSE hiện đang được chạy trong nền. Kết quả sẽ tự động gửi vào nhóm ngay khi hoàn thành (khoảng 2-3 phút)."
+            )
+            return
+            
+        await safe_reply_text(
             update, context, 
             "🔄 Chưa có dữ liệu quét trong bộ nhớ đệm (do máy chủ vừa khởi động lại).\n"
-            "Đang chạy quét nhanh 10 mã vốn hóa lớn sàn HOSE, vui lòng đợi trong giây lát..."
+            "Đang kích hoạt quét toàn bộ sàn HOSE (400+ mã) trong nền. Quá trình này mất khoảng 2-3 phút. Kết quả sẽ tự động gửi vào nhóm ngay khi hoàn tất!"
         )
-        quick_tickers = ["HPG", "SSI", "VCB", "FPT", "MWG", "VHM", "VIC", "VNM", "TCB", "CTG"]
-        cache = await execute_market_scan(quick_tickers)
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-            
-        if not cache:
-            await safe_reply_text(update, context, "❌ Có lỗi xảy ra khi chạy quét nhanh thị trường. Vui lòng kiểm tra lại kết nối mạng.")
-            return
+        # Start background scan task
+        asyncio.create_task(execute_market_scan_and_notify(update.effective_chat.id, context))
+        return
         
     date_str = cache.get("date", "")
     recs = cache.get("recommendations", [])
@@ -387,16 +434,23 @@ async def send_daily_alert_job(context: ContextTypes.DEFAULT_TYPE):
     Reads the cached recommendations and sends them to the configured Telegram Chat ID.
     """
     logger.info("Running daily alert sending job...")
+    global is_scanning
     cache = load_cache()
+    chat_id = config.TELEGRAM_CHAT_ID
     
     if not cache:
-        logger.warning("No market scan cache found. Running quick scan on-demand to generate recommendations...")
-        # Run quick scan on top 10 tickers
-        quick_tickers = ["HPG", "SSI", "VCB", "FPT", "MWG", "VHM", "VIC", "VNM", "TCB", "CTG"]
-        cache = await execute_market_scan(quick_tickers)
-        if not cache:
-            logger.error("Failed to run quick scan on-demand for daily alert.")
+        if is_scanning:
+            logger.info("Scan is already running. The alert will be sent by the scan task.")
             return
+            
+        logger.warning("No market scan cache found. Running full scan in background for daily alert...")
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text="🔔 <b>THÔNG BÁO KHUYẾN NGHỊ PHIÊN SÁNG</b>\n\n"
+                 "Bộ nhớ đệm bị trống (do máy chủ vừa khởi động lại). Bot đang tiến hành quét toàn bộ sàn HOSE trong nền. Kết quả sẽ được gửi sau 2-3 phút..."
+        )
+        asyncio.create_task(execute_market_scan_and_notify(chat_id, context))
+        return
         
     date_str = cache.get("date", "")
     recs = cache.get("recommendations", [])
