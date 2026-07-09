@@ -394,7 +394,7 @@ async def send_daily_alert_job(context: ContextTypes.DEFAULT_TYPE):
         return
         
     alert_text = (
-        f"🔔 <b>KHUYẾN NGHỊ CỔ PHIẾU WYCKOFF & VSA ({date_str})</b>\n"
+        f"🔔 <b>KHUYẾN NGHỊ CỔ PHIẾU ({date_str})</b>\n"
         f"<i>(Dữ liệu quét thị trường tự động lúc 15h00 phiên giao dịch hôm qua)</i>\n\n"
         f"Dưới đây là <b>{len(recs)} mã cổ phiếu tiềm năng mua gom tốt nhất</b>:\n\n"
     )
