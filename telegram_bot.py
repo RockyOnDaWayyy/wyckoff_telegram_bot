@@ -203,12 +203,21 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /scan command to display the latest cached recommendations."""
     cache = load_cache()
     if not cache:
-        await update.message.reply_text(
-            "⚠️ Hiện chưa có dữ liệu quét thị trường sàn HOSE. Lập lịch quét tự động diễn ra lúc 15h00 hàng ngày từ Thứ 2 đến Thứ 6.\n"
-            "Vui lòng thử lại sau.",
-            parse_mode='HTML'
+        status_msg = await safe_reply_text(
+            update, context, 
+            "🔄 Chưa có dữ liệu quét trong bộ nhớ đệm (do máy chủ vừa khởi động lại).\n"
+            "Đang chạy quét nhanh 10 mã vốn hóa lớn sàn HOSE, vui lòng đợi trong giây lát..."
         )
-        return
+        quick_tickers = ["HPG", "SSI", "VCB", "FPT", "MWG", "VHM", "VIC", "VNM", "TCB", "CTG"]
+        cache = await execute_market_scan(quick_tickers)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+            
+        if not cache:
+            await safe_reply_text(update, context, "❌ Có lỗi xảy ra khi chạy quét nhanh thị trường. Vui lòng kiểm tra lại kết nối mạng.")
+            return
         
     date_str = cache.get("date", "")
     recs = cache.get("recommendations", [])
@@ -238,16 +247,19 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += "💡 <i>Lưu ý: Bạn nên sử dụng lệnh /analyze chi tiết trên từng mã để xem biểu đồ kỹ thuật và các chỉ số định lượng VaR/MDD trước khi giao dịch.</i>"
     await safe_reply_text(update, context, msg)
 
-async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
+async def execute_market_scan(tickers_list=None):
     """
-    Background job scheduled at 15:00.
-    Scans all HOSE stocks and keeps the top 1-5 recommendations.
+    Helper function to run a market scan over a list of tickers.
+    If tickers_list is None, loads all HOSE tickers.
     """
-    logger.info("Starting background market scan job...")
-    
+    logger.info("Starting market scan execution...")
     try:
-        tickers = data_fetcher.get_hose_tickers()
-        logger.info(f"Loaded {len(tickers)} HOSE tickers for scanning.")
+        if tickers_list is None:
+            tickers = data_fetcher.get_hose_tickers()
+        else:
+            tickers = tickers_list
+            
+        logger.info(f"Loaded {len(tickers)} tickers for scanning.")
         
         # Get VNINDEX for comparison
         vnindex_df = data_fetcher.get_historical_data("VNINDEX")
@@ -255,8 +267,14 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
             vnindex_df = wyckoff_analyzer.calculate_indicators(vnindex_df)
             
         candidates = []
-        scan_date = datetime.date.today().strftime("%d/%m/%Y")
         
+        # Get scan date from last trading date of HPG
+        ref_df = data_fetcher.get_historical_data("HPG")
+        if not ref_df.empty:
+            scan_date = ref_df.iloc[-1]['Date'].strftime("%d/%m/%Y")
+        else:
+            scan_date = datetime.date.today().strftime("%d/%m/%Y")
+            
         # Scan each ticker
         count = 0
         for symbol in tickers:
@@ -264,7 +282,6 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
             if count % 20 == 0:
                 logger.info(f"Scanning progress: {count}/{len(tickers)}...")
                 
-            # Add short delay to avoid rate limit
             await asyncio.sleep(0.05)
             
             try:
@@ -272,8 +289,7 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
                 if df.empty or len(df) < 50:
                     continue
                     
-                # Exclude ultra low volume penny stocks (e.g. avg volume < 20k)
-                last_row = df.iloc[-1]
+                # Exclude penny stocks
                 vol_ma = df['Volume'].rolling(20).mean().iloc[-1] if 'Volume' in df.columns else 0
                 if vol_ma < 20000:
                     continue
@@ -281,37 +297,27 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
                 df = wyckoff_analyzer.calculate_indicators(df)
                 analysis = wyckoff_analyzer.detect_wyckoff_structure(df)
                 
-                # Check for buy indicators
-                # Strong buy: Spring detected recently, or SOS detected recently, or LPS/BUEC
-                # Or latest nến là Test cung cạn kiệt, Stopping volume
                 phase = analysis["phase"]
                 signals = analysis["signals"]
                 
-                # VSA pattern of the last bar
                 latest_vsa = None
                 if len(df) >= 3:
                     latest_vsa, _ = wyckoff_analyzer.detect_vsa_bar(df.iloc[-1], df.iloc[-2], df.iloc[-3])
                 
-                # Check if it has any buy signal in the last 5 trading days
+                # Check for buy signals in last 5 days
                 has_recent_buy_signal = False
                 recent_desc = ""
                 for sig in reversed(signals):
-                    # check if signal is in last 5 days
                     sig_date = pd.to_datetime(sig['date'])
-                    days_diff = (pd.to_datetime(last_row['Date']) - sig_date).days
-                    if days_diff <= 7: # calendar days approx 5 trading days
+                    days_diff = (pd.to_datetime(df.iloc[-1]['Date']) - sig_date).days
+                    if days_diff <= 7:
                         if "Spring" in sig['label'] or sig['label'] in ["SOS", "LPS / BUEC"]:
                             has_recent_buy_signal = True
                             recent_desc = sig['desc']
                             break
                             
-                # Check relative strength
                 rs_info = wyckoff_analyzer.analyze_relative_strength(df, vnindex_df)
                 
-                # Condition to be a recommendation:
-                # - Must be in Phase C (Tạo đáy rũ bỏ), Phase D (Tích lũy lại/LPS) or Phase B with Test/Stopping volume/Lack of offer VSA candle
-                # - Must NOT be in Markdown/Downtrend
-                # - Relative strength must be Stronger or Neutral
                 if "Downtrend" in phase:
                     continue
                     
@@ -327,9 +333,8 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
                 elif latest_vsa in ["Test", "Lack of Offer", "Stopping Volume"]:
                     is_candidate = True
                     reason = f"Xuất hiện tín hiệu VSA tích cực: {latest_vsa} (Kiểm thử cạn cung/Cầu đỡ)."
-
+                    
                 if is_candidate and rs_info["status"] in ["Stronger", "Neutral"]:
-                    # Score the candidate for sorting
                     score = 0
                     if rs_info["status"] == "Stronger":
                         score += 3
@@ -342,18 +347,16 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
                         
                     candidates.append({
                         "symbol": symbol,
-                        "price": last_row['Close'],
+                        "price": float(df.iloc[-1]['Close']),
                         "phase": phase,
                         "rs_status": rs_info["status"],
                         "desc": reason,
                         "score": score
                     })
-                    
             except Exception as e:
-                # Silently ignore individual stock load errors to keep scanning
-                continue
+                logger.error(f"Error scanning {symbol} during scan: {e}")
                 
-        # Sort candidates by score and select top 5
+        # Sort candidates and keep top 5
         candidates = sorted(candidates, key=lambda x: x['score'], reverse=True)
         top_recs = candidates[:5]
         
@@ -364,9 +367,19 @@ async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
         }
         save_cache(cache_data)
         logger.info(f"Market scan completed successfully. Saved {len(top_recs)} recommendations.")
+        return cache_data
         
     except Exception as e:
-        logger.error(f"Error in background market scan job: {e}", exc_info=True)
+        logger.error(f"Error in execute_market_scan: {e}", exc_info=True)
+        return None
+
+async def run_market_scan_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Background job scheduled at 15:00.
+    Scans all HOSE stocks and keeps the top 1-5 recommendations.
+    """
+    logger.info("Starting background market scan job...")
+    await execute_market_scan()
 
 async def send_daily_alert_job(context: ContextTypes.DEFAULT_TYPE):
     """
@@ -377,8 +390,13 @@ async def send_daily_alert_job(context: ContextTypes.DEFAULT_TYPE):
     cache = load_cache()
     
     if not cache:
-        logger.warning("No market scan cache found. Cannot send alert.")
-        return
+        logger.warning("No market scan cache found. Running quick scan on-demand to generate recommendations...")
+        # Run quick scan on top 10 tickers
+        quick_tickers = ["HPG", "SSI", "VCB", "FPT", "MWG", "VHM", "VIC", "VNM", "TCB", "CTG"]
+        cache = await execute_market_scan(quick_tickers)
+        if not cache:
+            logger.error("Failed to run quick scan on-demand for daily alert.")
+            return
         
     date_str = cache.get("date", "")
     recs = cache.get("recommendations", [])
