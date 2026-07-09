@@ -216,7 +216,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not recs:
         await update.message.reply_text(
             f"🔍 <b>KẾT QUẢ QUÉT THỊ TRƯỜNG HOSE ({date_str})</b>\n\n"
-            "Không tìm thấy cổ phiếu nào đạt tiêu chuẩn mua Wyckoff (Pha C/D khỏe, nến test cung cạn kiệt).",
+            "Không tìm thấy cổ phiếu nào đạt tiêu chuẩn mua (Pha C/D khỏe, nến test cung cạn kiệt).",
             parse_mode='HTML'
         )
         return
@@ -229,7 +229,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += (
             f"<b>{i}. Cổ phiếu {rec['symbol']}</b>\n"
             f"• Giá đóng cửa: <b>{rec['price']:,.0f} VND</b>\n"
-            f"• Giai đoạn Wyckoff: <b>{rec['phase']}</b>\n"
+            f"• Giai đoạn: <b>{rec['phase']}</b>\n"
             f"• Sức mạnh tương đối: <b>{rec['rs_status']}</b>\n"
             f"• Tín hiệu: <i>{rec['desc']}</i>\n"
             f"🔍 Chi tiết: <code>/analyze {rec['symbol']}</code>\n\n"
