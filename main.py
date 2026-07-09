@@ -1,5 +1,9 @@
 import datetime
 import logging
+import os
+import http.server
+import socketserver
+import threading
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 import config
@@ -12,8 +16,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+        
+    def log_message(self, format, *args):
+        pass
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    try:
+        with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
+            logger.info(f"Starting dummy health check server on port {port}")
+            httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"Error starting health check server: {e}")
+
 def main():
     """Start the telegram bot."""
+    # Start the dummy HTTP server in a daemon thread to bind to PORT for Render health check
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
     token = config.TELEGRAM_BOT_TOKEN
     if not token or ":" not in token:
         logger.error("Invalid TELEGRAM_BOT_TOKEN in configuration. Please check your .env file.")
