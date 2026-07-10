@@ -47,8 +47,8 @@ def main():
         
     logger.info("Initializing Wyckoff Telegram Bot...")
     
-    # Build Telegram Bot application
-    application = ApplicationBuilder().token(token).build()
+    # Build Telegram Bot application with post_init hook
+    application = ApplicationBuilder().token(token).post_init(telegram_bot.post_init_hook).build()
     
     # Register command handlers
     application.add_handler(CommandHandler("start", telegram_bot.start_command))
@@ -94,9 +94,7 @@ def main():
     else:
         logger.warning("JobQueue is not enabled! Scheduling features will not work.")
         
-    # Start startup alert check task in the background
-    import asyncio
-    asyncio.create_task(telegram_bot.run_startup_alert_check(application))
+    
     
     logger.info("Wyckoff Bot is now running. Polling for messages...")
     application.run_polling()

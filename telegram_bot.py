@@ -544,6 +544,12 @@ async def run_startup_alert_check(application):
     context = MockContext(application.bot)
     await send_daily_alert_job(context)
 
+async def post_init_hook(application) -> None:
+    """
+    Post-initialization hook called after the event loop starts.
+    """
+    asyncio.create_task(run_startup_alert_check(application))
+
 async def analyze_shortcut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for shortcut command links like /analyze_HPG."""
     text = update.message.text
