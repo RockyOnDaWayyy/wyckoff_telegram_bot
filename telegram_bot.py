@@ -238,6 +238,12 @@ async def execute_market_scan_and_notify(chat_id: int, context: ContextTypes.DEF
                 msg += "💡 <i>Lưu ý: Bạn nên sử dụng lệnh /analyze chi tiết trên từng mã để xem biểu đồ kỹ thuật và các chỉ số định lượng VaR/MDD trước khi giao dịch.</i>"
                 
             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+            
+            # If this notification was sent to the daily alert channel, update last_alert_sent
+            if str(chat_id) == str(config.TELEGRAM_CHAT_ID):
+                today_str = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7))).strftime("%Y-%m-%d")
+                cache["last_alert_sent"] = today_str
+                save_cache(cache)
         else:
             await context.bot.send_message(chat_id=chat_id, text="❌ Có lỗi xảy ra trong quá trình quét toàn bộ thị trường sàn HOSE.")
     except Exception as e:
@@ -488,8 +494,55 @@ async def send_daily_alert_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(chat_id=chat_id, text=alert_text, parse_mode='HTML')
         logger.info("Daily alert sent successfully.")
+        
+        # Update last_alert_sent in cache
+        today_str = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7))).strftime("%Y-%m-%d")
+        cache = load_cache()
+        if cache:
+            cache["last_alert_sent"] = today_str
+            save_cache(cache)
     except Exception as e:
         logger.error(f"Error sending daily alert to chat {chat_id}: {e}")
+
+async def run_startup_alert_check(application):
+    """
+    On startup, checks if it is after 09:00 VN time on a weekday,
+    and if the daily alert for today hasn't been sent yet.
+    If so, sends the alert immediately.
+    """
+    await asyncio.sleep(5)  # Wait 5 seconds for bot to initialize fully
+    
+    # Get current time in VN timezone (UTC+7)
+    vn_tz = datetime.timezone(datetime.timedelta(hours=7))
+    now = datetime.datetime.now(vn_tz)
+    
+    # Check if weekday (0=Monday, ..., 4=Friday)
+    if now.weekday() > 4:
+        logger.info("Startup check: Today is weekend. No alert needed.")
+        return
+        
+    # Check if it is after 9:00 AM VN Time
+    if now.hour < 9:
+        logger.info(f"Startup check: It is currently {now.strftime('%H:%M')} VN Time (before 09:00). Waiting for scheduled job.")
+        return
+        
+    # Check if already sent today
+    cache = load_cache()
+    today_str = now.strftime("%Y-%m-%d")
+    
+    if cache and cache.get("last_alert_sent") == today_str:
+        logger.info("Startup check: Alert has already been sent today.")
+        return
+        
+    logger.info("Startup check: Daily alert has not been sent today. Sending now...")
+    
+    # Create a mock Context to pass to send_daily_alert_job
+    class MockContext:
+        def __init__(self, bot):
+            self.bot = bot
+            
+    context = MockContext(application.bot)
+    await send_daily_alert_job(context)
 
 async def analyze_shortcut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for shortcut command links like /analyze_HPG."""

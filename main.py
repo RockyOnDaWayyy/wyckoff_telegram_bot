@@ -68,33 +68,36 @@ def main():
         telegram_bot.backtest_shortcut_handler
     ))
     
-    # Configure JobQueue scheduling (Monday to Friday, VN Time UTC+7)
+    # Configure JobQueue scheduling (Monday to Friday, VN Time UTC+7 -> scheduled in UTC)
     jq = application.job_queue
     if jq:
-        VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
-        
-        # 1. Market Scan at 15:00 VN time (Mon-Fri)
-        scan_time = datetime.time(hour=15, minute=0, second=0, tzinfo=VN_TZ)
+        # Convert VN Time to UTC to prevent JobQueue timezone conversion bugs on Render:
+        # 15:00 VN Time = 08:00 UTC
+        # 09:00 VN Time = 02:00 UTC
+        scan_time = datetime.time(hour=8, minute=0, second=0, tzinfo=datetime.timezone.utc)
         jq.run_daily(
             telegram_bot.run_market_scan_job, 
             time=scan_time, 
             days=(0, 1, 2, 3, 4),
             name="market_scan_job"
         )
-        logger.info(f"Scheduled Market Scan Job at 15:00 VN Time (Mon-Fri)")
+        logger.info("Scheduled Market Scan Job at 08:00 UTC (15:00 VN Time) (Mon-Fri)")
         
-        # 2. Daily Notification at 09:00 VN time (Mon-Fri)
-        alert_time = datetime.time(hour=9, minute=0, second=0, tzinfo=VN_TZ)
+        alert_time = datetime.time(hour=2, minute=0, second=0, tzinfo=datetime.timezone.utc)
         jq.run_daily(
             telegram_bot.send_daily_alert_job, 
             time=alert_time, 
             days=(0, 1, 2, 3, 4),
             name="daily_alert_job"
         )
-        logger.info(f"Scheduled Daily Alert Job at 09:00 VN Time (Mon-Fri)")
+        logger.info("Scheduled Daily Alert Job at 02:00 UTC (09:00 VN Time) (Mon-Fri)")
     else:
         logger.warning("JobQueue is not enabled! Scheduling features will not work.")
         
+    # Start startup alert check task in the background
+    import asyncio
+    asyncio.create_task(telegram_bot.run_startup_alert_check(application))
+    
     logger.info("Wyckoff Bot is now running. Polling for messages...")
     application.run_polling()
 
