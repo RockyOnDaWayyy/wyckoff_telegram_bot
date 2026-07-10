@@ -70,6 +70,12 @@ def get_historical_data(symbol, start_date=None, end_date=None):
                     q = Quote(symbol=symbol, source=source)
                     df = q.history(start=start_date, end=end_date)
                     if df is not None and not df.empty:
+                        # Multiply price columns by 1000 because domestic broker APIs return prices in thousands of VND
+                        price_cols = ['open', 'high', 'low', 'close']
+                        for col in price_cols:
+                            if col in df.columns:
+                                df[col] = df[col] * 1000
+                                
                         df = _standardize_columns(df)
                         if not df.empty:
                             print(f"Successfully fetched {symbol} from vnstock.api.quote ({source})")
