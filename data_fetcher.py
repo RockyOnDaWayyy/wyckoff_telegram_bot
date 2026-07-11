@@ -44,7 +44,7 @@ def get_hose_tickers():
     tickers = sorted(list(set([str(t).upper().strip() for t in tickers if t])))
     return tickers
 
-def get_historical_data(symbol, start_date=None, end_date=None):
+def get_historical_data(symbol, start_date=None, end_date=None, force_yfinance=False):
     """
     Get daily historical OHLCV data for a ticker or index.
     Sources tried: vnstock.api.quote (VCI or KBS), yfinance (fallback).
@@ -63,7 +63,7 @@ def get_historical_data(symbol, start_date=None, end_date=None):
     df = None
     
     # 1. Try vnstock.api.quote (VCI or KBS)
-    if has_vnstock_api:
+    if has_vnstock_api and not force_yfinance:
         if symbol != "VNINDEX":
             for source in ['VCI', 'KBS']:
                 try:

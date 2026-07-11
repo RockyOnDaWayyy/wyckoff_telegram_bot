@@ -322,7 +322,7 @@ async def execute_market_scan(tickers_list=None):
         candidates = []
         
         # Get scan date from last trading date of HPG
-        ref_df = data_fetcher.get_historical_data("HPG")
+        ref_df = data_fetcher.get_historical_data("HPG", force_yfinance=True)
         if not ref_df.empty:
             scan_date = ref_df.iloc[-1]['Date'].strftime("%d/%m/%Y")
         else:
@@ -338,7 +338,7 @@ async def execute_market_scan(tickers_list=None):
             await asyncio.sleep(0.05)
             
             try:
-                df = data_fetcher.get_historical_data(symbol)
+                df = data_fetcher.get_historical_data(symbol, force_yfinance=True)
                 if df.empty or len(df) < 50:
                     continue
                     
