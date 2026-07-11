@@ -23,6 +23,11 @@ def get_hose_tickers():
             l = Listing()
             df = l.symbols_by_exchange('HOSE')
             if df is not None and not df.empty:
+                # Explicitly filter by exchange column to isolate only HOSE symbols
+                exchange_col = 'exchange' if 'exchange' in df.columns else None
+                if exchange_col:
+                    df = df[df[exchange_col] == 'HOSE']
+                    
                 col = 'symbol' if 'symbol' in df.columns else df.columns[0]
                 raw_tickers = df[col].tolist()
                 tickers = [t for t in raw_tickers if len(str(t).strip()) == 3]
